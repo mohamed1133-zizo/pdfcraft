@@ -23,6 +23,8 @@ macro_rules! tl_ctx {
 }
 
 mod a11y_ui;
+mod ai_ui;
+pub use ai_ui::{AiKind, AiRequest, AiSource, endpoint_allowed as ai_endpoint_allowed};
 mod actions_ui;
 pub mod canvas;
 mod chrome;
@@ -398,6 +400,9 @@ pub struct PdfCraftApp {
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
     pub update_source: Option<updates::UpdateSource>,
     pub(crate) updates: updates::Updates,
+    /// How to ask the AI provider (the desktop app sets it; see `ai_ui`). `None`: no assistant.
+    pub ai_source: Option<ai_ui::AiSource>,
+    pub(crate) ai: ai_ui::Ai,
     pub palette_open: bool,
     pub palette_query: String,
     pub all_tools_expanded: bool,
@@ -673,6 +678,8 @@ impl PdfCraftApp {
             dialog: None,
             update_source: None,
             updates: updates::Updates::default(),
+            ai_source: None,
+            ai: ai_ui::Ai::default(),
             palette_open: false,
             palette_query: String::new(),
             all_tools_expanded: false,
@@ -1324,6 +1331,8 @@ impl PdfCraftApp {
             "actions": actions_ui::encode(&self.custom_actions),
             "combine_columns": self.combine_columns.to_json(),
             "comments_panel_closed": self.comments_panel_closed,
+            // The AI assistant: provider, models and addresses, and keys only when the user chose to keep them.
+            "ai": self.ai.persist(),
         })
         .to_string()
     }
@@ -1367,6 +1376,7 @@ impl PdfCraftApp {
         if let Some(on) = v["flatten_fill_sign"].as_bool() {
             self.flatten_fill_sign_on_save = on;
         }
+        self.ai.restore(&v["ai"]);
         // Settings are untrusted: an unusable pattern keeps the default.
         if let Some(f) = v["date_format"].as_str() {
             let _ = self.session.set_date_format(f);
@@ -1863,6 +1873,7 @@ impl eframe::App for PdfCraftApp {
         let now = ctx.input(|i| i.time);
         self.autosave_tick(now);
         self.poll_updates();
+        self.poll_ai();
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
         self.shortcuts(ctx);
