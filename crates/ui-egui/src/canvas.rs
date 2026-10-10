@@ -401,6 +401,12 @@ pub enum ViewAction {
     },
     /// Paste copied pages after the selection.
     PastePages,
+    /// Paste copied pages at this position (0 = before the first page).
+    PasteAt(usize),
+    /// Paste copied pages after this page, then delete this page.
+    ReplaceWithCopied(usize),
+    /// Tell the user about this page (number, size, rotation).
+    PageInfo(usize),
 }
 
 impl DocView {
@@ -2459,6 +2465,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
                 return;
             }
+            let page = view.comments.context_at.map_or(view.current, |(p, _)| p);
+            crate::page_menu::page_menu(ui, view, info, page, can_modify);
+            ui.separator();
             canvas_action = comments::context_menu(ui, view, info, prefs, allowed);
         });
         (wanted, visible_now)
