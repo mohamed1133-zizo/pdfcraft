@@ -74,6 +74,7 @@ mod home;
 mod icon_data;
 pub mod icons;
 pub mod last_session;
+mod page_menu;
 mod pageboxes;
 mod palette;
 mod panels;

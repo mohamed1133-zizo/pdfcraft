@@ -147,6 +147,9 @@ impl PdfCraftApp {
             Some(crate::canvas::ViewAction::Split) => self.dialog = Some(crate::Dialog::Split),
             Some(crate::canvas::ViewAction::CopyPages { cut }) => self.copy_pages(cut),
             Some(crate::canvas::ViewAction::PastePages) => self.paste_pages(),
+            Some(crate::canvas::ViewAction::PasteAt(at)) => self.paste_pages_at(at, None),
+            Some(crate::canvas::ViewAction::ReplaceWithCopied(page)) => self.paste_pages_at(page + 1, Some(page)),
+            Some(crate::canvas::ViewAction::PageInfo(page)) => self.show_page_info(page),
             None => {}
         }
         applied
@@ -191,6 +194,38 @@ impl PdfCraftApp {
         if self.apply_edit(Edit::InsertPagesFrom { name: clip.name.clone(), bytes: clip.bytes.clone(), pages: Some(clip.pages.clone()), at }) {
             self.views[i].select_pages(&(at..at + count).collect::<Vec<_>>());
         }
+    }
+
+    /// Insert the copied pages at `at` (0 = before the first page). With `replace`, that page is
+    /// deleted afterwards (the copied pages take its place), as a second undo step.
+    pub fn paste_pages_at(&mut self, at: usize, replace: Option<usize>) {
+        let Some(clip) = self.page_clipboard.clone() else {
+            self.notify_tr("Copy or cut pages first");
+            return;
+        };
+        let Some(i) = self.active else { return };
+        let count = clip.pages.len();
+        if !self.apply_edit(Edit::InsertPagesFrom { name: clip.name.clone(), bytes: clip.bytes.clone(), pages: Some(clip.pages.clone()), at }) {
+            return;
+        }
+        if let Some(page) = replace {
+            // The original page sits before the pasted ones when they went after it.
+            self.apply_edit(Edit::DeletePages { pages: vec![page] });
+            self.views[i].select_pages(&(page..page + count).collect::<Vec<_>>());
+        } else {
+            self.views[i].select_pages(&(at..at + count).collect::<Vec<_>>());
+        }
+    }
+
+    /// Right-click ▸ Page ▸ Show page information.
+    pub fn show_page_info(&mut self, page: usize) {
+        let Some((_, id)) = self.active_ids() else { return };
+        let Some(info) = self.session.get(id).and_then(|d| d.info.pages.get(page).map(|p| (p.width, p.height, p.rotation, p.label.clone()))) else {
+            return;
+        };
+        let (w, h, rotation, label) = info;
+        let (mm_w, mm_h) = (w * 25.4 / 72.0, h * 25.4 / 72.0);
+        self.notify(format!("Page {} ({label}): {w:.0} × {h:.0} pt ({mm_w:.0} × {mm_h:.0} mm), rotated {rotation}°", page + 1));
     }
 
     /// Make the active document say what its form shows (#166): apply an edit still queued on
