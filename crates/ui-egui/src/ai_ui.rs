@@ -239,9 +239,8 @@ pub(crate) struct Ai {
     /// The chosen provider (an index into [`PROVIDERS`]) and every provider's own settings.
     pub(crate) current: usize,
     pub(crate) states: Vec<ProviderState>,
-    /// Keep the keys in the settings file (plain text, on this computer). Off by default.
+    /// Keep the keys in the settings file (plain text, on this computer). On by default, so a key is entered once.
     pub(crate) remember_key: bool,
-    show_settings: bool,
     /// The page (0-based) the dialog was opened on, for [`Scope::Current`].
     page: usize,
     name: String,
@@ -258,8 +257,7 @@ impl Default for Ai {
             language: "English".into(),
             current: 0,
             states: PROVIDERS.iter().map(ProviderState::new).collect(),
-            remember_key: false,
-            show_settings: false,
+            remember_key: true,
             page: 0,
             name: String::new(),
             run: Run::Idle,
@@ -310,7 +308,7 @@ impl Ai {
         if let Some(i) = v["provider"].as_str().and_then(provider_by_id) {
             self.current = i;
         }
-        self.remember_key = v["remember_key"].as_bool() == Some(true);
+        self.remember_key = v["remember_key"].as_bool() != Some(false);
         for (i, info) in PROVIDERS.iter().enumerate() {
             let e = &v["providers"][info.id];
             let Some(s) = self.states.get_mut(i) else { continue };
@@ -401,7 +399,6 @@ impl PdfCraftApp {
         self.ai.task = task;
         self.ai.page = page;
         self.ai.name = name;
-        self.ai.show_settings = !self.has_ai_key();
         self.ai.open = true;
     }
 
@@ -505,6 +502,7 @@ pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let running = matches!(app.ai.run, Run::Running(_));
     let mut close = false;
     let mut send = false;
+    let mut open_settings = false;
     let has_key = app.has_ai_key();
     let modal = egui::Modal::new(egui::Id::new("ai-assistant")).show(ctx, |ui| {
         ui.set_width(560.0);
@@ -547,65 +545,15 @@ pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Task::Summarize => {}
         }
         ui.add_space(6.0);
-        // Which provider; each keeps its own key, model and address.
-        let mut chosen = app.ai.current;
+        // Provider, key and model are set once in Preferences; here they are only shown.
         ui.horizontal(|ui| {
-            ui.label("Provider");
-            ui.add_enabled_ui(!running, |ui| {
-                egui::ComboBox::from_id_salt("ai-provider").selected_text(PROVIDERS.get(chosen).map_or("", |p| p.label)).width(280.0).show_ui(ui, |ui| {
-                    for (i, p) in PROVIDERS.iter().enumerate() {
-                        ui.selectable_value(&mut chosen, i, p.label);
-                    }
-                });
-            });
+            let info = app.ai.info();
+            ui.label(egui::RichText::new(format!("{} · {}", info.label, app.ai.state().model)).color(t.text_muted));
+            if ui.add_enabled(!running, egui::Button::new("AI settings…")).clicked() {
+                open_settings = true;
+            }
         });
-        if chosen != app.ai.current && chosen < PROVIDERS.len() {
-            app.ai.current = chosen;
-            app.ai.run = Run::Idle;
-            app.ai.show_settings = !app.has_ai_key();
-        }
         let info = app.ai.info();
-        let remember = &mut app.ai.remember_key;
-        let st = match app.ai.states.get_mut(app.ai.current) {
-            Some(st) => st,
-            None => return,
-        };
-        egui::CollapsingHeader::new("Provider settings").default_open(app.ai.show_settings).show(ui, |ui| {
-            if info.needs_key || info.id == "custom" {
-                ui.horizontal(|ui| {
-                    ui.label(if info.needs_key { "API key" } else { "API key (if it needs one)" });
-                    ui.add(egui::TextEdit::singleline(&mut st.api_key).password(true).desired_width(320.0).char_limit(MAX_KEY_CHARS));
-                });
-            }
-            ui.horizontal(|ui| {
-                ui.label("Model");
-                ui.add(egui::TextEdit::singleline(&mut st.model).desired_width(280.0).char_limit(MAX_MODEL_CHARS));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Address");
-                ui.add(egui::TextEdit::singleline(&mut st.base_url).desired_width(380.0).char_limit(MAX_URL_CHARS));
-            });
-            if !endpoint_allowed(&st.base_url) {
-                ui.label(egui::RichText::new("The address must start with https:// (http:// is accepted only for this computer).").small().color(egui::Color32::from_rgb(0xC6, 0x28, 0x28)));
-            }
-            if info.kind == AiKind::Anthropic {
-                ui.horizontal(|ui| {
-                    ui.label("Workspace ID");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut st.workspace_id)
-                            .hint_text("only if the provider asks for it")
-                            .desired_width(320.0)
-                            .char_limit(MAX_WORKSPACE_CHARS),
-                    );
-                });
-            }
-            ui.checkbox(remember, "Remember keys on this computer (saved unencrypted in PdfCraft's settings)");
-            let mut help = key_help(info).to_string();
-            if !info.key_env.is_empty() {
-                help.push_str(&format!(" Left empty, PdfCraft uses the {} environment variable.", info.key_env));
-            }
-            ui.label(egui::RichText::new(help).small().color(t.text_muted));
-        });
         ui.add_space(6.0);
         match &app.ai.run {
             Run::Idle => {}
@@ -659,12 +607,17 @@ pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 }
             });
             if !has_key {
-                ui.label(egui::RichText::new("Enter an API key in Provider settings").small().color(t.text_muted));
+                ui.label(egui::RichText::new("Enter an API key in AI settings").small().color(t.text_muted));
             }
         });
     });
     if modal.should_close() {
         close = true;
+    }
+    if open_settings {
+        app.ai.open = false;
+        app.dialog = Some(crate::Dialog::Preferences);
+        return;
     }
     if send {
         app.send_ai();
@@ -742,7 +695,7 @@ mod provider_tests {
 
     #[test]
     fn settings_round_trip_and_keys_stay_out_unless_kept() {
-        let mut ai = Ai { current: provider_by_id("gemini").unwrap(), ..Default::default() };
+        let mut ai = Ai { current: provider_by_id("gemini").unwrap(), remember_key: false, ..Default::default() };
         ai.states[1].model = "gemini-x".into();
         ai.states[1].api_key = "secret-g".into();
         ai.states[0].workspace_id = "wrkspc_9".into();
@@ -752,6 +705,9 @@ mod provider_tests {
         loaded.restore(&saved);
         assert_eq!((loaded.info().id, loaded.states[1].model.as_str(), loaded.states[0].workspace_id.as_str()), ("gemini", "gemini-x", "wrkspc_9"));
         assert!(loaded.states[1].api_key.is_empty());
+        assert!(!loaded.remember_key, "turning it off is remembered");
+        // By default a key is kept, so it is entered once.
+        assert!(Ai::default().remember_key);
 
         ai.remember_key = true;
         let mut kept = Ai::default();
@@ -775,4 +731,67 @@ mod provider_tests {
         long.restore(&serde_json::json!({ "providers": { "anthropic": { "model": "m".repeat(5000) } } }));
         assert_eq!(long.states[0].model.chars().count(), MAX_MODEL_CHARS);
     }
+}
+
+/// Preferences ▸ AI assistant: which provider, its key, model and address. Set once; the key is
+/// kept between launches unless the user turns that off.
+pub(crate) fn settings_ui(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &theme::Tokens) {
+    ui.label(egui::RichText::new("AI assistant").font(theme::semibold(13.0)));
+    let mut chosen = app.ai.current;
+    ui.horizontal(|ui| {
+        ui.label("Provider");
+        egui::ComboBox::from_id_salt("ai-pref-provider").selected_text(PROVIDERS.get(chosen).map_or("", |p| p.label)).width(280.0).show_ui(
+            ui,
+            |ui| {
+                for (i, p) in PROVIDERS.iter().enumerate() {
+                    ui.selectable_value(&mut chosen, i, p.label);
+                }
+            },
+        );
+    });
+    if chosen != app.ai.current && chosen < PROVIDERS.len() {
+        app.ai.current = chosen;
+        app.ai.run = Run::Idle;
+    }
+    let info = app.ai.info();
+    let remember = &mut app.ai.remember_key;
+    let Some(st) = app.ai.states.get_mut(app.ai.current) else { return };
+    if info.needs_key || info.id == "custom" {
+        ui.horizontal(|ui| {
+            ui.label(if info.needs_key { "API key" } else { "API key (if it needs one)" });
+            ui.add(egui::TextEdit::singleline(&mut st.api_key).password(true).desired_width(320.0).char_limit(MAX_KEY_CHARS));
+        });
+    }
+    ui.horizontal(|ui| {
+        ui.label("Model");
+        ui.add(egui::TextEdit::singleline(&mut st.model).desired_width(280.0).char_limit(MAX_MODEL_CHARS));
+    });
+    ui.horizontal(|ui| {
+        ui.label("Address");
+        ui.add(egui::TextEdit::singleline(&mut st.base_url).desired_width(380.0).char_limit(MAX_URL_CHARS));
+    });
+    if !endpoint_allowed(&st.base_url) {
+        ui.label(
+            egui::RichText::new("The address must start with https:// (http:// is accepted only for this computer).")
+                .small()
+                .color(egui::Color32::from_rgb(0xC6, 0x28, 0x28)),
+        );
+    }
+    if info.kind == AiKind::Anthropic {
+        ui.horizontal(|ui| {
+            ui.label("Workspace ID");
+            ui.add(
+                egui::TextEdit::singleline(&mut st.workspace_id)
+                    .hint_text("only if the provider asks for it")
+                    .desired_width(320.0)
+                    .char_limit(MAX_WORKSPACE_CHARS),
+            );
+        });
+    }
+    ui.checkbox(remember, "Remember keys on this computer (saved unencrypted in PdfCraft's settings)");
+    let mut help = key_help(info).to_string();
+    if !info.key_env.is_empty() {
+        help.push_str(&format!(" Left empty, PdfCraft uses the {} environment variable.", info.key_env));
+    }
+    ui.label(egui::RichText::new(help).small().color(t.text_muted));
 }
