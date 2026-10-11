@@ -742,8 +742,7 @@ mod provider_tests {
 
     #[test]
     fn settings_round_trip_and_keys_stay_out_unless_kept() {
-        let mut ai = Ai::default();
-        ai.current = provider_by_id("gemini").unwrap();
+        let mut ai = Ai { current: provider_by_id("gemini").unwrap(), ..Default::default() };
         ai.states[1].model = "gemini-x".into();
         ai.states[1].api_key = "secret-g".into();
         ai.states[0].workspace_id = "wrkspc_9".into();
