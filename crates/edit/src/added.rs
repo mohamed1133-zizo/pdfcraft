@@ -298,9 +298,22 @@ enum Piece {
 /// A line of an Arabic item in drawing order (the Unicode bidirectional algorithm, UAX #9), and
 /// its width at the item's size. `rtl` is its paragraph's direction.
 fn arabic_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f64), EditError> {
+    let pieces = arabic_pieces(line, rtl)?;
+    let width = pieces
+        .iter()
+        .map(|p| match p {
+            Piece::Latin(s) => t.family.width(s, t.size, t.bold),
+            Piece::Arabic(clusters) => clusters.iter().map(|c| c.advance).sum::<f64>() * t.size,
+        })
+        .sum();
+    Ok((pieces, width))
+}
+
+/// The pieces of one line in drawing order (UAX #9), Arabic shaped, the rest left to the caller's font.
+fn arabic_pieces(line: &str, rtl: bool) -> Result<Vec<Piece>, EditError> {
     // unicode-bidi indexes the first level of a line, so an empty one would panic.
     if line.is_empty() {
-        return Ok((Vec::new(), 0.0));
+        return Ok(Vec::new());
     }
     let base = if rtl { Level::rtl() } else { Level::ltr() };
     let info = ParagraphBidiInfo::new(line, Some(base));
@@ -333,14 +346,97 @@ fn arabic_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f6
             });
         }
     }
-    let width = pieces
-        .iter()
-        .map(|p| match p {
-            Piece::Latin(s) => t.family.width(s, t.size, t.bold),
-            Piece::Arabic(clusters) => clusters.iter().map(|c| c.advance).sum::<f64>() * t.size,
-        })
-        .sum();
-    Ok((pieces, width))
+    Ok(pieces)
+}
+
+/// Whether `text` has Arabic-script characters the Arabic face shapes.
+pub(crate) fn has_arabic(text: &str) -> bool {
+    text.chars().any(shaped_arabic)
+}
+
+/// The width of `line` in points at `size`: Arabic shaped, the rest measured by `latin`.
+pub(crate) fn arabic_advance(line: &str, rtl: bool, size: f64, latin: impl Fn(&str, f64) -> f64) -> f64 {
+    match arabic_pieces(line, rtl) {
+        Ok(pieces) => pieces
+            .iter()
+            .map(|p| match p {
+                Piece::Latin(s) => latin(s, size),
+                Piece::Arabic(clusters) => clusters.iter().map(|c| c.advance).sum::<f64>() * size,
+            })
+            .sum(),
+        Err(_) => latin(line, size),
+    }
+}
+
+/// A piece of a replaced line, ready for the content stream.
+pub(crate) enum Run {
+    /// Latin text: the caller shows it in the line's own or a standard font.
+    Latin(String),
+    /// Arabic glyphs: a Type 3 font resource name and the codes of its glyphs, with the advance
+    /// (em) of the whole run.
+    Arabic { font: String, codes: Vec<u8>, advance: f64 },
+}
+
+/// Lay out one line with Arabic in it (display order, `rtl` the paragraph direction) and add the
+/// Type 3 fonts it needs to `fonts`. Nothing is added when a glyph is missing.
+pub(crate) fn arabic_runs(doc: &mut Document, text: &str, rtl: bool, fonts: &mut Dict) -> Result<Vec<Run>, EditError> {
+    let pieces = arabic_pieces(text, rtl)?;
+    let mut keys: Vec<&ShapedCluster> = Vec::new();
+    let mut index: HashMap<ClusterKey, usize> = HashMap::new();
+    for c in pieces.iter().flat_map(|p| match p {
+        Piece::Arabic(clusters) => clusters.as_slice(),
+        Piece::Latin(_) => &[],
+    }) {
+        index.entry(cluster_key(c)).or_insert_with(|| {
+            keys.push(c);
+            keys.len() - 1
+        });
+    }
+    if keys.len() > GLYPHS_PER_FONT * MAX_ARABIC_FONTS {
+        return Err(EditError::Invalid("the text uses too many different Arabic glyphs".into()));
+    }
+    let mut outlines = HashMap::new();
+    for c in &keys {
+        for (id, _) in &c.glyphs {
+            if !outlines.contains_key(id) {
+                outlines.insert(*id, arabic_glyph(*id).map_err(|e| arabic_error(e, &c.text))?);
+            }
+        }
+    }
+    let mut names = Vec::new();
+    for chunk in keys.chunks(GLYPHS_PER_FONT) {
+        let font = type3_arabic(doc, chunk, &outlines);
+        let mut name = format!("PCAr{}", font.num);
+        let mut suffix = 0usize;
+        while fonts.contains(name.as_bytes()) {
+            suffix = suffix.saturating_add(1);
+            name = format!("PCAr{}_{suffix}", font.num);
+        }
+        fonts.set(name.clone().into_bytes(), Object::Ref(font));
+        names.push(name);
+    }
+    let mut runs: Vec<Run> = Vec::new();
+    for piece in &pieces {
+        match piece {
+            Piece::Latin(s) => runs.push(Run::Latin(s.clone())),
+            Piece::Arabic(clusters) => {
+                // One run per Type 3 font: a run changes font where the glyph numbering does.
+                for c in clusters {
+                    let Some(&k) = index.get(&cluster_key(c)) else { continue };
+                    let Some(name) = names.get(k / GLYPHS_PER_FONT) else { continue };
+                    let code = u8::try_from(k % GLYPHS_PER_FONT + 1).unwrap_or(1);
+                    match runs.last_mut() {
+                        Some(Run::Arabic { font, codes, advance }) if font == name => {
+                            codes.push(code);
+                            *advance += c.advance;
+                        }
+                        _ => runs.push(Run::Arabic { font: name.clone(), codes: vec![code], advance: c.advance }),
+                    }
+                }
+            }
+        }
+    }
+    Ok(runs)
 }
 
 /// The width of `s` in an Arabic item; the item's font's estimate if it can't be shaped (drawing

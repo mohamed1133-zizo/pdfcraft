@@ -1574,3 +1574,52 @@ fn hostile_form_xobjects_are_read_once() {
     assert_eq!(texts, ["once", "from b", "from a", "inherited", "bad matrix"]);
     assert!(images::reading_images(&doc, 0).unwrap().is_empty());
 }
+
+#[test]
+fn arabic_line_edit_is_shaped_keeps_its_right_edge_and_stays_searchable() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let result = text::replace_line(&mut doc, 0, 0, "مسجل الشركات");
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        // Built without craft-fonts: the edit is refused with a reason, and the page is untouched.
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Arabic font") && msg.contains("CRAFT_FONTS_DIR"), "{msg}");
+        assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "ab");
+        return;
+    }
+    let result = result.unwrap();
+    assert_eq!(result.substituted.as_deref(), Some("Arabic (Type 3)"));
+    let bytes = page_content_bytes(&doc, 0);
+    let content = String::from_utf8_lossy(&bytes);
+    assert!(content.contains("/PCAr"), "{content}");
+    // Right to left, so the line is moved to keep its right edge (a TJ shift, not a Td).
+    assert!(content.contains("TJ"), "{content}");
+    // Copy and search still give the letters.
+    let reopened = reopen(&doc);
+    let found: String = text::text_lines(&reopened, 0).unwrap().iter().map(|l| l.text.clone()).collect();
+    for ch in "مسجلالشركات".chars() {
+        assert!(found.contains(ch), "{ch} missing from {found}");
+    }
+    // Undone by editing back: Latin text on the same line goes through the ordinary path.
+    text::replace_line(&mut doc, 0, 0, "ab").unwrap();
+    assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap()[0].text, "ab");
+}
+
+#[test]
+fn arabic_paragraph_edit_wraps_right_aligned_and_never_panics() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab cd) Tj ET");
+    let text = "مسجل الشركات في إمارة رأس الخيمة وفقا للقوانين والأنظمة المعمول بها في الإمارة";
+    let result = text::replace_block(&mut doc, 0, 0, text);
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        assert!(result.unwrap_err().to_string().contains("Arabic font"));
+        return;
+    }
+    assert_eq!(result.unwrap().substituted.as_deref(), Some("Arabic (Type 3)"));
+    let reopened = reopen(&doc);
+    let found: String = text::text_lines(&reopened, 0).unwrap().iter().map(|l| l.text.clone()).collect();
+    for ch in "مسجلالشركات".chars() {
+        assert!(found.contains(ch), "{ch} missing from {found}");
+    }
+    // Mixed with Latin text and digits, and an empty edit, neither panics nor loses the page.
+    text::replace_block(&mut doc, 0, 0, "رقم الرخصة 123 ABC").unwrap();
+    assert!(text::replace_block(&mut doc, 0, 0, "ab cd").is_ok());
+}

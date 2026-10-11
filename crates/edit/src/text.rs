@@ -896,6 +896,46 @@ fn type3_encode(fallback: &Type3Fallback, text: &str) -> Option<Vec<u8>> {
     text.chars().map(|ch| fallback.codes.iter().find(|(c, _, _)| *c == ch).map(|(_, code, _)| *code)).collect()
 }
 
+/// The operators that show Arabic `runs` (from `added::arabic_runs`): each run sets its own font,
+/// and `shift` (TJ units) moves the pen before the first, which changes no line matrix.
+fn show_runs(out: &mut Vec<Op>, runs: &[crate::added::Run], size: f64, shift: Option<f64>) -> Result<(), EditError> {
+    let mut pending = shift.filter(|v| v.abs() > 0.01).map(|v| Object::Real((v * 100.0).round() / 100.0));
+    for run in runs {
+        let bytes = match run {
+            crate::added::Run::Latin(s) => {
+                let win = pdfcraft_fonts::win_ansi(s);
+                let back: String = win.iter().map(|b| char::from_u32(u32::from(*b)).unwrap_or('?')).collect();
+                if s.chars().zip(back.chars()).any(|(a, b)| b == '?' && a != '?') {
+                    return Err(EditError::Invalid(format!("\"{s}\" has characters Helvetica can't show")));
+                }
+                out.push(Op::new("Tf", vec![Object::name(ARABIC_LATIN), pdfcraft_content::num(size)]));
+                win
+            }
+            crate::added::Run::Arabic { font, codes, .. } => {
+                out.push(Op::new("Tf", vec![Object::name(font), pdfcraft_content::num(size)]));
+                codes.clone()
+            }
+        };
+        match pending.take() {
+            Some(n) => out.push(Op::new("TJ", vec![Object::Array(vec![n, Object::String(PdfString::literal(bytes))])])),
+            None => out.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))])),
+        }
+    }
+    Ok(())
+}
+
+/// The standard font that shows the Latin text inside an Arabic line.
+const ARABIC_LATIN: &str = "PCEdHelvetica";
+
+fn register_arabic_latin(fonts_res: &mut Dict) {
+    let mut f = Dict::new();
+    f.set(b"Type".to_vec(), Object::name("Font"));
+    f.set(b"Subtype".to_vec(), Object::name("Type1"));
+    f.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+    f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    fonts_res.set(ARABIC_LATIN.as_bytes().to_vec(), Object::Dict(f));
+}
+
 /// Replace the text of line `line` (an index into [`text_lines`]) on `page` with `text`.
 pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) -> Result<LineEdit, EditError> {
     let text = text.replace(['\n', '\r'], " ");
@@ -923,9 +963,29 @@ pub fn replace_line(doc: &mut Document, page: usize, line: usize, text: &str) ->
         }
         _ => {}
     }
+    let arabic = crate::added::has_arabic(&text);
     match reused {
-        Some(bytes) => replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))])),
-        None => {
+        // Arabic is always shaped (joined letters, right to left), never copied code by code.
+        Some(bytes) if !arabic => replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))])),
+        _ if arabic => {
+            let rtl = unicode_bidi::get_base_direction(text.as_str()) == unicode_bidi::Direction::Rtl;
+            let runs = crate::added::arabic_runs(doc, &text, rtl, &mut fonts_res)?;
+            let size = font_size_before(&ops, first).unwrap_or(target.size);
+            let width = |r: &crate::added::Run| match r {
+                crate::added::Run::Latin(s) => pdfcraft_fonts::helvetica_width(s, size),
+                crate::added::Run::Arabic { advance, .. } => advance * size,
+            };
+            let new_w: f64 = runs.iter().map(width).sum();
+            // A right-to-left line keeps its right edge: the pen starts where the old text's
+            // width and the new text's differ (TJ moves the pen without touching the line matrix).
+            let old_w = (target.rect[2] - target.rect[0]) / target.origin.k.abs().max(1e-6);
+            let shift = (rtl && size > 0.0).then(|| -(old_w - new_w) / size * 1000.0);
+            show_runs(&mut replacement, &runs, size, shift)?;
+            replacement.push(Op::new("Tf", vec![Object::name(&target.font), pdfcraft_content::num(size)]));
+            register_arabic_latin(&mut fonts_res);
+            substituted = Some("Arabic (Type 3)".to_string());
+        }
+        _ => {
             if needs_type3(&text) {
                 let fallback = type3_font(doc, &mut fonts_res, &text, source_family(&target.base_font), target.bold)?;
                 let bytes = type3_encode(&fallback, &text)
@@ -1163,11 +1223,14 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     }
     let o_state = ts_state.clone();
     let metrics = fonts_res.get(font_name.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned()).map(|d| Metrics::from_dict(doc, &d));
-    let reuse = style.family.is_none() && style.bold.is_none() && metrics.as_ref().is_some_and(|m| m.encode(&text).is_some());
+    // Arabic is always shaped (joined letters, right to left) in Type 3 fonts, never copied code by code.
+    let arabic = crate::added::has_arabic(&text);
+    let rtl = arabic && unicode_bidi::get_base_direction(text.as_str()) == unicode_bidi::Direction::Rtl;
+    let reuse = !arabic && style.family.is_none() && style.bold.is_none() && metrics.as_ref().is_some_and(|m| m.encode(&text).is_some());
     // The chosen style also determines the real Japanese fallback outlines and advances.
     let (family, bold, italic) = style.family.unwrap_or((source_family(&b.base_font), b.bold, b.italic));
     let bold = style.bold.unwrap_or(bold);
-    let type3 = if !reuse && needs_type3(&text) { Some(type3_font(doc, &mut fonts_res, &text, family, bold)?) } else { None };
+    let type3 = if !reuse && !arabic && needs_type3(&text) { Some(type3_font(doc, &mut fonts_res, &text, family, bold)?) } else { None };
     let std_width = move |s: &str, size: f64| -> f64 {
         match family {
             crate::added::Family::Courier => s.chars().count() as f64 * 0.6 * size,
@@ -1189,6 +1252,11 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
         None => (b.rect[2] - b.rect[0]).max(size * k),
     };
     let advance = |s: &str| -> f64 {
+        if arabic {
+            // Shaped width plus spacing, in user space.
+            let w = crate::added::arabic_advance(s, rtl, size, |t, sz| std_width(t, sz));
+            return (w + s.chars().count() as f64 * o_state.char_spacing) * o_state.scale * k;
+        }
         let t = match (&metrics, reuse) {
             (Some(m), true) => m
                 .encode(s)
@@ -1217,6 +1285,11 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
         let encoder = fallback.clone();
         substituted = Some(format!("{} Type3", fallback.family));
         (name, Box::new(move |s: &str| type3_encode(&encoder, s)))
+    } else if arabic {
+        // Each run sets its own font; this one only opens the text object.
+        register_arabic_latin(&mut fonts_res);
+        substituted = Some("Arabic (Type 3)".to_string());
+        (ARABIC_LATIN.to_string(), Box::new(|s: &str| Some(pdfcraft_fonts::win_ansi(s))))
     } else {
         let win = pdfcraft_fonts::win_ansi(&text);
         let back: String = win.iter().map(|c| char::from_u32(u32::from(*c)).unwrap_or('?')).collect();
@@ -1267,15 +1340,19 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
     block_ops.push(Op::new("Tm", o.tm.iter().map(|v| n(*v)).collect()));
     // Alignment: each line's offset from the left edge, in text space.
     let offset = |line: &str| -> f64 {
+        // A single right-to-left line keeps its right edge (and grows to the left).
+        if rtl && members.len() == 1 && style.align.is_none() && style.width.is_none() {
+            return ((b.rect[2] - b.rect[0]) - advance(line)) / k;
+        }
         let free = (width - advance(line)).max(0.0) / k;
-        match style.align {
+        match style.align.or(if rtl { Some(crate::added::Align::Right) } else { None }) {
             Some(crate::added::Align::Center) => free / 2.0,
             Some(crate::added::Align::Right) => free,
             _ => 0.0,
         }
     };
     // Justify: word spacing (single-byte code 32 only) so each line but the last fills the width.
-    let single_byte = !reuse || metrics.as_ref().is_some_and(|m| !m.composite);
+    let single_byte = !arabic && (!reuse || metrics.as_ref().is_some_and(|m| !m.composite));
     let justify = style.align == Some(crate::added::Align::Justify) && single_byte;
     let mut x = 0.0;
     let mut tw_set = 0.0;
@@ -1293,8 +1370,13 @@ pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option
             block_ops.push(Op::new("Tw", vec![n(tw)]));
             tw_set = tw;
         }
-        let bytes = encode(line).ok_or_else(|| EditError::Invalid(format!("\"{line}\" can't be shown")))?;
-        block_ops.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))]));
+        if arabic {
+            let runs = crate::added::arabic_runs(doc, line, rtl, &mut fonts_res)?;
+            show_runs(&mut block_ops, &runs, size, None)?;
+        } else {
+            let bytes = encode(line).ok_or_else(|| EditError::Invalid(format!("\"{line}\" can't be shown")))?;
+            block_ops.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))]));
+        }
         let w = (advance(line) + tw * spaces as f64 * o_state.scale * k) / k;
         underlines.push((dx, dx + w, -(i as f64) * lead - size * 0.12));
     }
