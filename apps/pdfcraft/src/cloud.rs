@@ -444,8 +444,19 @@ fn nextcloud_base(a: &CloudAccount) -> Result<String, String> {
     Ok(base.to_string())
 }
 
-fn dav_path(a: &CloudAccount, base: &str, name: &str) -> String {
-    format!("{base}/remote.php/dav/files/{}/PdfCraft{}", pct(a.user.trim()), if name.is_empty() { String::new() } else { format!("/{}", pct(name)) })
+/// The id Nextcloud files this account's data under. It can differ from the name typed at sign-in
+/// (an e-mail address, say), so ask the server rather than assume.
+fn nextcloud_uid(a: &CloudAccount, base: &str, http: Transport) -> Result<String, String> {
+    let req = Req::new("GET", format!("{base}/ocs/v2.php/cloud/user"))
+        .header("Authorization", basic(a))
+        .header("OCS-APIRequest", "true")
+        .header("Accept", "application/json");
+    let v = ok("Nextcloud (sign-in check)", http(&req)?)?;
+    Ok(v["ocs"]["data"]["id"].as_str().filter(|s| !s.is_empty()).unwrap_or(a.user.trim()).to_string())
+}
+
+fn dav_path(uid: &str, base: &str, name: &str) -> String {
+    format!("{base}/remote.php/dav/files/{}/PdfCraft{}", pct(uid), if name.is_empty() { String::new() } else { format!("/{}", pct(name)) })
 }
 
 /// Check a Nextcloud account by asking who it is.
@@ -528,9 +539,14 @@ pub fn share(
         CloudKind::Nextcloud => {
             let base = nextcloud_base(&a)?;
             // The folder may exist already (405); anything else surfaces when the upload fails.
-            let _ = http(&Req::new("MKCOL", dav_path(&a, &base, "")).header("Authorization", basic(&a)));
-            let up = Req::new("PUT", dav_path(&a, &base, &file)).header("Authorization", basic(&a)).body("application/pdf", bytes.to_vec());
-            ok("Nextcloud", http(&up)?)?;
+            let uid = nextcloud_uid(&a, &base, http)?;
+            // 405 means the folder exists already.
+            let (mk, mk_body) = http(&Req::new("MKCOL", dav_path(&uid, &base, "")).header("Authorization", basic(&a)))?;
+            if !(200..300).contains(&mk) && mk != 405 {
+                return Err(failure("Nextcloud (creating the PdfCraft folder)", mk, &mk_body));
+            }
+            let up = Req::new("PUT", dav_path(&uid, &base, &file)).header("Authorization", basic(&a)).body("application/pdf", bytes.to_vec());
+            ok("Nextcloud (upload)", http(&up)?)?;
             let path = format!("/PdfCraft/{file}");
             let expire = days.map(|d| ymd(now + u64::from(d) * 86_400));
             let mut pairs = vec![("path", path.as_str()), ("shareType", "3"), ("permissions", "1")];
@@ -542,7 +558,7 @@ pub fn share(
                 .header("OCS-APIRequest", "true")
                 .header("Accept", "application/json")
                 .form(&pairs);
-            let v = ok("Nextcloud", http(&create)?)?;
+            let v = ok("Nextcloud (making the link)", http(&create)?)?;
             let link = text(&v["ocs"]["data"]["url"], "link")?.to_string();
             let id = v["ocs"]["data"]["id"]
                 .as_str()
@@ -592,7 +608,8 @@ pub fn remove(kind: CloudKind, a: &CloudAccount, item: &SharedFile, delete_file:
         }
         (CloudKind::Nextcloud, true) => {
             let base = nextcloud_base(&a)?;
-            Req::new("DELETE", dav_path(&a, &base, &item.remote_id)).header("Authorization", basic(&a))
+            let uid = nextcloud_uid(&a, &base, http)?;
+            Req::new("DELETE", dav_path(&uid, &base, &item.remote_id)).header("Authorization", basic(&a))
         }
         (CloudKind::Nextcloud, false) => {
             let base = nextcloud_base(&a)?;
@@ -741,14 +758,19 @@ mod tests {
     #[test]
     fn nextcloud_sets_the_links_own_end_date() {
         let mut a = CloudAccount { server: "https://cloud.test/".into(), user: "me".into(), password: "pw".into(), ..Default::default() };
-        let s = Script::new(&[(201, ""), (201, ""), (200, r#"{"ocs":{"data":{"id":"77","url":"https://cloud.test/s/tok"}}}"#)]);
+        let s = Script::new(&[
+            (200, r#"{"ocs":{"data":{"id":"me"}}}"#),
+            (201, ""),
+            (201, ""),
+            (200, r#"{"ocs":{"data":{"id":"77","url":"https://cloud.test/s/tok"}}}"#),
+        ]);
         let (_, item) = share(CloudKind::Nextcloud, &a, "a.pdf", b"x", Some(3), 1_760_000_000, &s.transport()).unwrap();
         let sent = s.sent.borrow();
-        assert_eq!((sent[0].method, sent[1].method), ("MKCOL", "PUT"));
-        assert!(sent[1].url.starts_with("https://cloud.test/remote.php/dav/files/me/PdfCraft/"));
+        assert_eq!((sent[1].method, sent[2].method), ("MKCOL", "PUT"));
+        assert!(sent[2].url.starts_with("https://cloud.test/remote.php/dav/files/me/PdfCraft/"));
         assert!(
-            String::from_utf8_lossy(&sent[2].body).contains("expireDate=2025-10-12")
-                && String::from_utf8_lossy(&sent[2].body).contains("shareType=3")
+            String::from_utf8_lossy(&sent[3].body).contains("expireDate=2025-10-12")
+                && String::from_utf8_lossy(&sent[3].body).contains("shareType=3")
         );
         assert_eq!((item.link.as_str(), item.link_id.as_str()), ("https://cloud.test/s/tok", "77"));
         // Plain http to another computer is refused before anything is sent.
