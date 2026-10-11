@@ -233,104 +233,134 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
 /// Preferences: interface language, identity and JavaScript. Returns `true` to close.
 pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new(tl!("Preferences")).font(theme::semibold(18.0)));
+    ui.add_space(6.0);
+    let tab_id = egui::Id::new("preferences-tab");
+    let mut tab: u8 = ui.data(|d| d.get_temp(tab_id)).unwrap_or(0);
     ui.horizontal(|ui| {
-        ui.label(tl!("Interface language"));
-        let selected = crate::i18n::Lang::from_code(&app.language).map_or(tl!("Auto"), crate::i18n::Lang::name);
-        let before = app.language.clone();
-        egui::ComboBox::from_id_salt("interface-language").selected_text(selected).show_ui(ui, |ui| {
-            if ui.selectable_value(&mut app.language, crate::i18n::AUTO.to_string(), tl!("Auto")).clicked() {
-                ui.close();
+        for (k, label) in [(0u8, "General"), (1, "Comments and signing"), (2, "AI assistant"), (3, "Cloud sharing"), (4, "Advanced")] {
+            if widgets::mode_tab(ui, label, tab == k).clicked() {
+                tab = k;
             }
-            for language in crate::i18n::Lang::all() {
-                if ui.selectable_value(&mut app.language, language.code().to_string(), language.name()).clicked() {
-                    ui.close();
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(tab_id, tab));
+    ui.add_space(6.0);
+    ui.separator();
+    // The page is as tall as the window allows and scrolls, so nothing is ever out of reach.
+    let height = (ui.ctx().content_rect().height() - 260.0).clamp(240.0, 600.0);
+    egui::ScrollArea::vertical().max_height(height).auto_shrink([false, true]).show(ui, |ui| {
+        ui.add_space(4.0);
+        match tab {
+            0 => {
+            ui.horizontal(|ui| {
+                ui.label(tl!("Interface language"));
+                let selected = crate::i18n::Lang::from_code(&app.language).map_or(tl!("Auto"), crate::i18n::Lang::name);
+                let before = app.language.clone();
+                egui::ComboBox::from_id_salt("interface-language").selected_text(selected).show_ui(ui, |ui| {
+                    if ui.selectable_value(&mut app.language, crate::i18n::AUTO.to_string(), tl!("Auto")).clicked() {
+                        ui.close();
+                    }
+                    for language in crate::i18n::Lang::all() {
+                        if ui.selectable_value(&mut app.language, language.code().to_string(), language.name()).clicked() {
+                            ui.close();
+                        }
+                    }
+                });
+                // Relabel the rest of this dialog in the new language right away, not next frame.
+                if app.language != before {
+                    crate::i18n::set_current(crate::i18n::Lang::from_pref(&app.language));
                 }
+            });
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(tl!("Documents and view")).font(theme::semibold(13.0)));
+            ui.horizontal(|ui| {
+                ui.label(tl!("Default workspace mode"));
+                for (mode, label) in [
+                    (crate::Mode::AllTools, "All tools"),
+                    (crate::Mode::Read, "Read"),
+                    (crate::Mode::Edit, "Edit"),
+                    (crate::Mode::Convert, "Convert"),
+                    (crate::Mode::Sign, "E-Sign"),
+                ] {
+                    ui.radio_value(&mut app.default_mode, mode, tl!(label));
+                }
+            });
+            ui.label(
+                egui::RichText::new(tl!("Used when opening PDFs. An explicit launch or control mode takes precedence for the session."))
+                    .small()
+                    .color(t.text_muted),
+            );
+            let defaults = &mut app.view_defaults;
+            ui.horizontal(|ui| {
+                ui.label(tl!("Default page display"));
+                for l in crate::canvas::PageLayout::ORDER {
+                    ui.radio_value(&mut defaults.layout, l, tl!(l.label()));
+                }
+            });
+            ui.horizontal(|ui| {
+                use crate::canvas::Fit;
+                ui.label(tl!("Default zoom"));
+                ui.radio_value(&mut defaults.fit, Fit::Width, tl!("Fit to width"));
+                ui.radio_value(&mut defaults.fit, Fit::Page, tl!("Zoom to page level"));
+                ui.radio_value(&mut defaults.fit, Fit::None, tl!("Custom"));
+                // Editing the percentage selects Custom.
+                let mut percent = defaults.zoom * 100.0;
+                if ui.add(egui::DragValue::new(&mut percent).range(8.0..=6400.0).max_decimals(0).suffix("%")).changed() {
+                    (defaults.fit, defaults.zoom) = (Fit::None, percent / 100.0);
+                }
+            });
+            ui.label(
+                egui::RichText::new(tl!("Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages."))
+                    .small()
+                    .color(t.text_muted),
+            );
+            // The web build has no file paths to reopen.
+            #[cfg(not(target_arch = "wasm32"))]
+            ui.checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed"));
+            ui.add_space(8.0);
             }
-        });
-        // Relabel the rest of this dialog in the new language right away, not next frame.
-        if app.language != before {
-            crate::i18n::set_current(crate::i18n::Lang::from_pref(&app.language));
+            1 => {
+            // Identity: the author of new comments (Acrobat: Preferences ▸ Identity).
+            ui.label(egui::RichText::new(tl!("Identity")).font(theme::semibold(13.0)));
+            ui.horizontal(|ui| {
+                let label = ui.label(tl!("Name on new comments"));
+                ui.add(egui::TextEdit::singleline(&mut app.comment_prefs.author).desired_width(220.0).char_limit(crate::MAX_AUTHOR_CHARS))
+                    .labelled_by(label.id);
+            });
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(tl!("Fill & Sign")).font(theme::semibold(13.0)));
+            ui.checkbox(&mut app.flatten_fill_sign_on_save, tl!("Flatten Fill & Sign when saving"));
+            ui.label(
+                egui::RichText::new(tl!("Text, marks and signatures become part of the page. Other comments stay editable.")).small().color(t.text_muted),
+            );
+            ui.add_space(8.0);
+            date_format(ui, app, t);
+            ui.add_space(8.0);
+            }
+            2 => {
+            crate::ai_ui::settings_ui(ui, app, t);
+            ui.add_space(8.0);
+            }
+            3 => {
+            crate::share_ui::settings_ui(ui, app, t);
+            ui.add_space(8.0);
+            }
+            _ => {
+            ui.label(egui::RichText::new("JavaScript").font(theme::semibold(13.0)));
+            egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                let mut on = app.session.javascript();
+                if ui.checkbox(&mut on, tl!("Enable Acrobat JavaScript")).changed() {
+                    app.session.set_javascript(on);
+                }
+                ui.label(
+                    egui::RichText::new(tl!("Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work."))
+                        .small()
+                        .color(t.text_muted),
+                );
+            });
+            }
         }
-    });
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new(tl!("Documents and view")).font(theme::semibold(13.0)));
-    ui.horizontal(|ui| {
-        ui.label(tl!("Default workspace mode"));
-        for (mode, label) in [
-            (crate::Mode::AllTools, "All tools"),
-            (crate::Mode::Read, "Read"),
-            (crate::Mode::Edit, "Edit"),
-            (crate::Mode::Convert, "Convert"),
-            (crate::Mode::Sign, "E-Sign"),
-        ] {
-            ui.radio_value(&mut app.default_mode, mode, tl!(label));
-        }
-    });
-    ui.label(
-        egui::RichText::new(tl!("Used when opening PDFs. An explicit launch or control mode takes precedence for the session."))
-            .small()
-            .color(t.text_muted),
-    );
-    let defaults = &mut app.view_defaults;
-    ui.horizontal(|ui| {
-        ui.label(tl!("Default page display"));
-        for l in crate::canvas::PageLayout::ORDER {
-            ui.radio_value(&mut defaults.layout, l, tl!(l.label()));
-        }
-    });
-    ui.horizontal(|ui| {
-        use crate::canvas::Fit;
-        ui.label(tl!("Default zoom"));
-        ui.radio_value(&mut defaults.fit, Fit::Width, tl!("Fit to width"));
-        ui.radio_value(&mut defaults.fit, Fit::Page, tl!("Zoom to page level"));
-        ui.radio_value(&mut defaults.fit, Fit::None, tl!("Custom"));
-        // Editing the percentage selects Custom.
-        let mut percent = defaults.zoom * 100.0;
-        if ui.add(egui::DragValue::new(&mut percent).range(8.0..=6400.0).max_decimals(0).suffix("%")).changed() {
-            (defaults.fit, defaults.zoom) = (Fit::None, percent / 100.0);
-        }
-    });
-    ui.label(
-        egui::RichText::new(tl!("Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages."))
-            .small()
-            .color(t.text_muted),
-    );
-    // The web build has no file paths to reopen.
-    #[cfg(not(target_arch = "wasm32"))]
-    ui.checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed"));
-    ui.add_space(8.0);
-    // Identity: the author of new comments (Acrobat: Preferences ▸ Identity).
-    ui.label(egui::RichText::new(tl!("Identity")).font(theme::semibold(13.0)));
-    ui.horizontal(|ui| {
-        let label = ui.label(tl!("Name on new comments"));
-        ui.add(egui::TextEdit::singleline(&mut app.comment_prefs.author).desired_width(220.0).char_limit(crate::MAX_AUTHOR_CHARS))
-            .labelled_by(label.id);
-    });
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new(tl!("Fill & Sign")).font(theme::semibold(13.0)));
-    ui.checkbox(&mut app.flatten_fill_sign_on_save, tl!("Flatten Fill & Sign when saving"));
-    ui.label(
-        egui::RichText::new(tl!("Text, marks and signatures become part of the page. Other comments stay editable.")).small().color(t.text_muted),
-    );
-    ui.add_space(8.0);
-    date_format(ui, app, t);
-    ui.add_space(8.0);
-    crate::ai_ui::settings_ui(ui, app, t);
-    ui.add_space(8.0);
-    crate::share_ui::settings_ui(ui, app, t);
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new("JavaScript").font(theme::semibold(13.0)));
-    egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        let mut on = app.session.javascript();
-        if ui.checkbox(&mut on, tl!("Enable Acrobat JavaScript")).changed() {
-            app.session.set_javascript(on);
-        }
-        ui.label(
-            egui::RichText::new(tl!("Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work."))
-                .small()
-                .color(t.text_muted),
-        );
     });
     ui.add_space(10.0);
     buttons(ui, tl!("OK"), &[]).is_some()

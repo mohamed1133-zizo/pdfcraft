@@ -295,7 +295,7 @@ impl Ai {
             .collect();
         serde_json::json!({
             "provider": self.info().id,
-            "remember_key": self.remember_key,
+            "keep_keys": self.remember_key,
             "providers": providers,
         })
     }
@@ -308,7 +308,7 @@ impl Ai {
         if let Some(i) = v["provider"].as_str().and_then(provider_by_id) {
             self.current = i;
         }
-        self.remember_key = v["remember_key"].as_bool() != Some(false);
+        self.remember_key = v["keep_keys"].as_bool() != Some(false);
         for (i, info) in PROVIDERS.iter().enumerate() {
             let e = &v["providers"][info.id];
             let Some(s) = self.states.get_mut(i) else { continue };

@@ -294,6 +294,23 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         if icons::button(ui, "printer", 32.0, false, tl!("Print (⌘P)")).clicked() {
                             app.run_command("print.dialog");
                         }
+                        // Share: every way to hand the document on, including a link.
+                        let share = icons::button(ui, "share-2", 32.0, false, "Share");
+                        egui::Popup::menu(&share).show(|ui| {
+                            ui.set_min_width(210.0);
+                            for (id, label) in [
+                                ("file.share_link", tl!("Share as link…")),
+                                ("file.save_as", tl!("Save as…")),
+                                ("export.docx", tl!("Export to Word…")),
+                                ("export.image", tl!("Export to image…")),
+                                ("print.dialog", tl!("Print…")),
+                            ] {
+                                if widgets::menu_item(ui, label, "").clicked() {
+                                    app.run_command(id);
+                                    ui.close();
+                                }
+                            }
+                        });
                         if icons::button(ui, "save", 32.0, false, tl!("Save (M4)")).clicked() {
                             app.run_command("file.save");
                         }

@@ -811,3 +811,32 @@ fn page_tools_open_their_result_as_a_new_document() {
     assert_eq!(h.state().views.len(), 4);
     assert_eq!(pages(&h, 3), 3);
 }
+
+#[test]
+fn preferences_are_on_tabs() {
+    let mut h = pages_panel_harness(&[(200, 300); 2]);
+    h.state_mut().run_command("app.preferences");
+    h.run_steps(4);
+    // The first tab holds the language and view settings; the others are one click away.
+    assert!(h.query_by_label("Interface language").is_some());
+    assert!(h.query_by_label("Provider").is_none(), "the AI settings are on their own tab");
+    h.get_by_label("AI assistant").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("Provider").is_some() && h.query_by_label("Interface language").is_none());
+    h.get_by_label("Cloud sharing").click();
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("Google Drive").is_some());
+    h.get_by_label("Advanced").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("JavaScript").is_some());
+}
+
+#[test]
+fn the_share_button_lists_every_way_to_share() {
+    let mut h = pages_panel_harness(&[(200, 300); 2]);
+    h.get_by_label("Share").click();
+    h.run_steps(4);
+    for item in ["Share as link…", "Save as…", "Export to Word…", "Print…"] {
+        assert!(h.query_by_label_contains(item).is_some(), "{item} is in the Share menu");
+    }
+}
