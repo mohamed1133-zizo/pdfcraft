@@ -150,6 +150,9 @@ impl PdfCraftApp {
             Some(crate::canvas::ViewAction::PasteAt(at)) => self.paste_pages_at(at, None),
             Some(crate::canvas::ViewAction::ReplaceWithCopied(page)) => self.paste_pages_at(page + 1, Some(page)),
             Some(crate::canvas::ViewAction::PageInfo(page)) => self.show_page_info(page),
+            Some(crate::canvas::ViewAction::CopyPageImage(page)) => self.copy_whole_page_image(page),
+            Some(crate::canvas::ViewAction::SavePageImage(page)) => self.save_whole_page_image(page),
+            Some(crate::canvas::ViewAction::PrintPage(page, how)) => self.print_page(page, how),
             None => {}
         }
         applied

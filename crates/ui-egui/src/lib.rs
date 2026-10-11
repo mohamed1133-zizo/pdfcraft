@@ -77,6 +77,7 @@ mod icon_data;
 pub mod icons;
 pub mod last_session;
 mod page_menu;
+pub use page_menu::PrintAs;
 mod pageboxes;
 mod palette;
 mod panels;

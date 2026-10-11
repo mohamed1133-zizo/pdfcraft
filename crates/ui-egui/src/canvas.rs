@@ -407,6 +407,12 @@ pub enum ViewAction {
     ReplaceWithCopied(usize),
     /// Tell the user about this page (number, size, rotation).
     PageInfo(usize),
+    /// Put this page's picture on the clipboard.
+    CopyPageImage(usize),
+    /// Save this page's picture to a file.
+    SavePageImage(usize),
+    /// Open the Print dialog for this page.
+    PrintPage(usize, crate::page_menu::PrintAs),
 }
 
 impl DocView {

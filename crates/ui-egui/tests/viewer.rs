@@ -755,3 +755,22 @@ fn pages_panel_thumbnails_have_a_context_menu() {
     h.run_steps(3);
     assert_eq!(h.state().page_clipboard.as_ref().map(|c| c.pages.clone()), Some(vec![2]));
 }
+
+#[test]
+fn a_page_saves_as_an_image_and_prints_alone() {
+    use pdfcraft_ui_egui::canvas::ViewAction;
+    let mut h = pages_panel_harness(&[(200, 300); 3]);
+    let out = std::env::temp_dir().join(format!("pdfcraft-page-image-{}.png", std::process::id()));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().views[0].pending_action = Some(ViewAction::SavePageImage(1));
+    h.run_steps(4);
+    let png = std::fs::read(&out).expect("the page image is written");
+    let _ = std::fs::remove_file(&out);
+    assert!(png.starts_with(&[0x89, b'P', b'N', b'G']), "a PNG file");
+
+    h.state_mut().views[0].pending_action = Some(ViewAction::PrintPage(2, pdfcraft_ui_egui::PrintAs::ActualSize));
+    h.run_steps(4);
+    let d = &h.state().print_draft;
+    assert_eq!((d.which, d.current_page), (pdfcraft_ui_egui::PrintWhich::Current, 2));
+    assert_eq!(d.size, pdfcraft_engine::print::SizeMode::Actual);
+}
