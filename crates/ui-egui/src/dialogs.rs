@@ -922,6 +922,10 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 close = apply || cancel;
                 return;
             }
+            Dialog::ShareLink => {
+                close = crate::share_ui::dialog_body(ui, app, &t);
+                return;
+            }
             Dialog::PageTools(tool) => {
                 let (apply, cancel) = crate::page_tools::body(ui, app, &t, tool);
                 page_tool_now = apply.then_some(tool);

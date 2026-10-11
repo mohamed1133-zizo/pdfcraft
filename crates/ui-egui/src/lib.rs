@@ -25,6 +25,7 @@ macro_rules! tl_ctx {
 mod a11y_ui;
 mod ai_ui;
 pub use ai_ui::{AiKind, AiRequest, AiSource, endpoint_allowed as ai_endpoint_allowed};
+pub use share_ui::{AfterExpiry, CloudAccount, CloudAction, CloudJob, CloudKind, CloudOutput, CloudSource, SharedFile};
 mod actions_ui;
 pub mod canvas;
 mod chrome;
@@ -78,6 +79,7 @@ pub mod icons;
 pub mod last_session;
 mod page_menu;
 mod page_tools;
+mod share_ui;
 pub use page_menu::PrintAs;
 mod pageboxes;
 mod palette;
@@ -235,6 +237,8 @@ pub enum Dialog {
     PageBoxes,
     /// Resize pages, Pages per sheet, Overlay pages.
     PageTools(page_tools::Tool),
+    /// File ▸ Share as link.
+    ShareLink,
     /// Add / Update Header and Footer, Watermark, Background.
     Marks(pdfcraft_engine::MarkKind),
     /// Export a PDF ▸ Image / Text.
@@ -408,6 +412,9 @@ pub struct PdfCraftApp {
     /// How to ask the AI provider (the desktop app sets it; see `ai_ui`). `None`: no assistant.
     pub ai_source: Option<ai_ui::AiSource>,
     pub(crate) ai: ai_ui::Ai,
+    /// Sends files to the user's cloud (set by the desktop application; none in the web build).
+    pub cloud_source: Option<share_ui::CloudSource>,
+    pub(crate) cloud: share_ui::Cloud,
     pub palette_open: bool,
     pub palette_query: String,
     pub all_tools_expanded: bool,
@@ -686,6 +693,8 @@ impl PdfCraftApp {
             updates: updates::Updates::default(),
             ai_source: None,
             ai: ai_ui::Ai::default(),
+            cloud_source: None,
+            cloud: Default::default(),
             palette_open: false,
             palette_query: String::new(),
             all_tools_expanded: false,
@@ -1340,6 +1349,7 @@ impl PdfCraftApp {
             "comments_panel_closed": self.comments_panel_closed,
             // The AI assistant: provider, models and addresses, and keys only when the user chose to keep them.
             "ai": self.ai.persist(),
+            "cloud": self.cloud.persist(),
         })
         .to_string()
     }
@@ -1384,6 +1394,7 @@ impl PdfCraftApp {
             self.flatten_fill_sign_on_save = on;
         }
         self.ai.restore(&v["ai"]);
+        self.cloud.restore(&v["cloud"]);
         // Settings are untrusted: an unusable pattern keeps the default.
         if let Some(f) = v["date_format"].as_str() {
             let _ = self.session.set_date_format(f);
@@ -1881,6 +1892,7 @@ impl eframe::App for PdfCraftApp {
         self.autosave_tick(now);
         self.poll_updates();
         self.poll_ai();
+        self.poll_cloud(ctx);
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
         self.shortcuts(ctx);

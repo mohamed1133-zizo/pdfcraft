@@ -10074,3 +10074,15 @@ commands = ["optimize.repair"]
 tools = ["doc_repair"]
 evidence = ["crates/engine/src/tests.rs::repair_rewrites_a_file_whose_cross_reference_data_is_damaged", "crates/ui-egui/tests/viewer.rs::page_tools_open_their_result_as_a_new_document"]
 notes = "rewrites the file from scratch and reports what was repaired; opens the copy"
+
+[[feature]]
+id = "share.cloud-link"
+title = "Share as link through the user's own cloud (Google Drive, OneDrive, Dropbox, Nextcloud)"
+area = "N"
+tier = "P2"
+milestone = "M14"
+status = "shipped"
+commands = ["file.share_link"]
+tools = []
+evidence = ["crates/ui-egui/src/share_ui.rs::tests::a_shared_file_is_linked_then_removed_when_its_time_is_up", "apps/pdfcraft/src/cloud.rs::tests::google_drive_uploads_then_opens_the_link_to_anyone"]
+notes = "sign in once in Preferences; the link's end is enforced by PdfCraft (delete the file, stop the link, or do nothing); desktop only, no headless tool; tested against scripted answers, not live accounts"
