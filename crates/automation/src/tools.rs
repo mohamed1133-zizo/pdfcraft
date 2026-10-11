@@ -250,6 +250,12 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc", "from", "to"],
         )),
+        t("doc_overlay", "Overlay pages from a file", "Put the pages of another PDF (`file`) on pages of this one, one for one: the first listed page gets the file's first page, the second its second, and so on (it starts over when the file is shorter). Each overlay page is scaled to fit. under: true puts it behind the page's own content instead of on top. Undoable.")
+            .cmd("page.overlay")
+            .with(schema(json!({ "doc": doc(), "file": { "type": "string", "description": "The PDF whose pages are laid over (or under) these." }, "pages": pages("to overlay (default: all)"), "under": { "type": "boolean" } }), &["doc", "file"])),
+        t("doc_repair", "Repair PDF", "Write a repaired copy to `path`: the document written out again from scratch, which rebuilds damaged cross-reference data and drops unreachable leftovers. Returns what was repaired while the file was read (`repairs`, empty when it was sound). The open document is unchanged.")
+            .cmd("optimize.repair")
+            .with(schema(json!({ "doc": doc(), "path": { "type": "string", "description": "Where to write the repaired PDF." } }), &["doc", "path"])),
         t("form_fields", "List form fields", "Every interactive form field: name, type (text, checkbox, radio, combo, list, button, signature), value, options, page, rect (top-left-origin points) and rotation (0, 90, 180 or 270 degrees counterclockwise), read-only and required flags.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),

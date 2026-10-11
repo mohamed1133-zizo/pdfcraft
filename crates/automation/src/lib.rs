@@ -220,6 +220,23 @@ impl Automation {
             "command_batch" => self.command_batch(&a)?,
             "doc_inspect" => self.doc_inspect(&a)?,
             "render_preview" => return self.render_preview(&a).map(|c| vec![c]),
+            "doc_overlay" => {
+                let n = self.doc(&a)?.info.pages.len();
+                let pages = match a.opt_ints("pages")? {
+                    Some(_) => self.pages(&a, "pages")?,
+                    None => (0..n).collect(),
+                };
+                let Some(f) = self.mark_file(&a)? else { return Err(ToolError::InvalidArgs("file is required".into())) };
+                let under = a.opt_bool("under")?.unwrap_or(false);
+                self.apply(&a, Edit::OverlayPages { pages, name: f.name, bytes: f.bytes, under })?
+            }
+            "doc_repair" => {
+                let id = self.doc(&a)?.id;
+                let path = self.resolve(a.str("path")?, true)?;
+                let (bytes, repairs) = self.session.repair(id).map_err(failed)?;
+                write_atomic(&path, &bytes)?;
+                json!({ "path": path.to_string_lossy(), "bytes": bytes.len(), "repairs": repairs })
+            }
             "page_number" => {
                 use pdfcraft_organize::LabelStyle as L;
                 let n = self.doc(&a)?.info.pages.len();

@@ -508,6 +508,10 @@ impl PdfCraftApp {
                 self.boxes_draft.seeded = None;
                 self.dialog = Some(Dialog::PageBoxes);
             }
+            "page.resize" => self.open_page_tool(crate::page_tools::Tool::Resize),
+            "page.per_sheet" => self.open_page_tool(crate::page_tools::Tool::PerSheet),
+            "page.overlay" => self.overlay_dialog(),
+            "optimize.repair" => self.repair_pdf(),
             "page.extract" => self.dialog = Some(Dialog::Extract),
             "page.rotate_dialog" => {
                 if let Some(i) = active {

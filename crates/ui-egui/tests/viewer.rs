@@ -774,3 +774,40 @@ fn a_page_saves_as_an_image_and_prints_alone() {
     assert_eq!((d.which, d.current_page), (pdfcraft_ui_egui::PrintWhich::Current, 2));
     assert_eq!(d.size, pdfcraft_engine::print::SizeMode::Actual);
 }
+
+#[test]
+fn page_tools_open_their_result_as_a_new_document() {
+    let mut h = pages_panel_harness(&[(200, 300); 3]);
+    let pages = |h: &Harness<'static, PdfCraftApp>, view: usize| h.state().session.get(h.state().views[view].id).unwrap().info.pages.len();
+
+    // Pages per sheet: three pages, two to a sheet, make two sheets in a new tab.
+    h.state_mut().run_command("page.per_sheet");
+    h.run_steps(3);
+    assert!(h.state().dialog.is_some(), "the dialog is showing");
+    h.get_by_label("OK").click();
+    h.run_steps(6);
+    assert_eq!(h.state().views.len(), 2);
+    assert_eq!(pages(&h, 1), 2);
+    assert_eq!(pages(&h, 0), 3, "the original is untouched");
+
+    // Resize: one page per page, on A4.
+    h.state_mut().active = Some(0);
+    h.state_mut().run_command("page.resize");
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(6);
+    assert_eq!(h.state().views.len(), 3);
+    assert_eq!(pages(&h, 2), 3);
+    let (w, hgt) = {
+        let d = h.state().session.get(h.state().views[2].id).unwrap();
+        (d.info.pages[0].width, d.info.pages[0].height)
+    };
+    assert!((w - 595.0).abs() < 2.0 && (hgt - 842.0).abs() < 2.0, "A4, not {w}×{hgt}");
+
+    // Repair opens a rewritten copy.
+    h.state_mut().active = Some(0);
+    h.state_mut().run_command("optimize.repair");
+    h.run_steps(6);
+    assert_eq!(h.state().views.len(), 4);
+    assert_eq!(pages(&h, 3), 3);
+}

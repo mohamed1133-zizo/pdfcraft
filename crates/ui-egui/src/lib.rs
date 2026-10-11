@@ -77,6 +77,7 @@ mod icon_data;
 pub mod icons;
 pub mod last_session;
 mod page_menu;
+mod page_tools;
 pub use page_menu::PrintAs;
 mod pageboxes;
 mod palette;
@@ -232,6 +233,8 @@ pub enum Dialog {
     Protect,
     /// Set Page Boxes (crop, trim, bleed, art, media).
     PageBoxes,
+    /// Resize pages, Pages per sheet, Overlay pages.
+    PageTools(page_tools::Tool),
     /// Add / Update Header and Footer, Watermark, Background.
     Marks(pdfcraft_engine::MarkKind),
     /// Export a PDF ▸ Image / Text.
@@ -557,6 +560,7 @@ pub struct PdfCraftApp {
     pub protect_draft: protect::ProtectDraft,
     /// Set Page Boxes dialog state.
     pub boxes_draft: pageboxes::BoxesDraft,
+    pub page_tools: page_tools::Draft,
     /// Header & footer / watermark / background dialog state.
     pub marks_draft: marks_ui::MarksDraft,
     /// Export dialog settings.
@@ -772,6 +776,7 @@ impl PdfCraftApp {
             pending_link: None,
             protect_draft: Default::default(),
             boxes_draft: Default::default(),
+            page_tools: Default::default(),
             marks_draft: Default::default(),
             export_draft: Default::default(),
             export_status: None,

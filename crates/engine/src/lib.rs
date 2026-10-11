@@ -1006,6 +1006,15 @@ pub enum Edit {
         replace: bool,
         file: Option<MarkFile>,
     },
+    /// Put the pages of another PDF on these pages, one for one: the k-th page in `pages` gets
+    /// page k of the file (it starts over when the file has fewer pages). `under` puts the file
+    /// behind the page's own content instead of on top. Each overlay page is scaled to fit.
+    OverlayPages {
+        pages: Vec<usize>,
+        name: String,
+        bytes: Arc<Vec<u8>>,
+        under: bool,
+    },
     /// `file`: a picture from a file instead of a colour.
     AddBackground {
         pages: Vec<usize>,
@@ -1178,6 +1187,8 @@ impl Edit {
             Edit::AddHeaderFooter { .. } => "Update header & footer".into(),
             Edit::AddWatermark { replace: false, .. } => "Add watermark".into(),
             Edit::AddWatermark { .. } => "Update watermark".into(),
+            Edit::OverlayPages { under: false, .. } => "Overlay pages".into(),
+            Edit::OverlayPages { .. } => "Underlay pages".into(),
             Edit::AddBackground { replace: false, .. } => "Add background".into(),
             Edit::AddBackground { .. } => "Update background".into(),
             Edit::RemoveMarks { kind: MarkKind::HeaderFooter } => "Remove header & footer".into(),
@@ -1310,6 +1321,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         Edit::SetInfo { .. }
         | Edit::AddHeaderFooter { .. }
         | Edit::AddWatermark { .. }
+        | Edit::OverlayPages { .. }
         | Edit::AddBackground { .. }
         | Edit::RemoveMarks { .. }
         | Edit::AddField { .. }
@@ -1626,6 +1638,25 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                 s.source = Some(mark_source(doc, f)?);
             }
             pdfcraft_edit::add_watermark(doc, pages, &s, *replace)?
+        }
+        Edit::OverlayPages { pages, name, bytes, under } => {
+            let src = open_source(name, bytes)?;
+            let count = pdfcraft_organize::page_count(&src)?;
+            if count == 0 {
+                return Err(EditError::Source(format!("{name}: it has no pages")));
+            }
+            for (k, page) in pages.iter().enumerate() {
+                let (xobject, size) = pdfcraft_organize::page_as_form(doc, &src, k % count)?;
+                let wm = Watermark {
+                    source: Some(pdfcraft_edit::MarkSource { xobject, size, image: false }),
+                    scale: 1.0,
+                    opacity: 1.0,
+                    rotation: 0.0,
+                    behind: *under,
+                    ..Default::default()
+                };
+                pdfcraft_edit::add_watermark(doc, &[*page], &wm, false)?;
+            }
         }
         Edit::AddBackground { pages, settings, replace, file } => {
             let mut s = settings.clone();
@@ -2706,6 +2737,21 @@ impl Session {
             }
         };
         pdfcraft_print::impose(&cos, settings).map_err(|e| EditError::Print(e.to_string()))
+    }
+
+    /// Repair PDF: the document written out again from scratch, so damaged cross-reference data
+    /// and unreachable leftovers are gone. Returns the new file and what was repaired while the
+    /// original was read (empty when it was sound). The open document is left as it is.
+    pub fn repair(&self, id: DocId) -> Result<(Arc<Vec<u8>>, Vec<String>), EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let cos = match doc.editor.as_ref() {
+            Some(e) => e.cos.clone(),
+            None => {
+                pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
+            }
+        };
+        let log = cos.repair_log().to_vec();
+        Ok((self.write_new(&cos)?, log))
     }
 
     /// Combine whole files, in order, into new PDF bytes (one bookmark per file).

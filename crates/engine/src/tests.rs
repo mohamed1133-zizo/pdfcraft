@@ -2490,3 +2490,47 @@ fn oversized_exports_clamp_and_report_their_dpi_unless_strict() {
     let err = export::Exporter::from_source(strict).png(0, 600.0).unwrap_err();
     assert!(err.contains("exceeds renderer limits"), "{err}");
 }
+
+#[test]
+fn overlay_puts_another_files_pages_on_top_or_underneath_one_for_one() {
+    let (mut s, id) = session_with(3);
+    let (other, other_id) = session_with(2);
+    let bytes = other.save_bytes(other_id).unwrap();
+    s.apply(id, Edit::OverlayPages { pages: vec![0, 1, 2], name: "other.pdf".into(), bytes: bytes.clone(), under: false }).unwrap();
+    let texts = page_texts(&s, id);
+    // Page k gets page k of the overlay (a shorter overlay starts over): both texts are on each
+    // page, drawn at the same spot so the extractor interleaves them.
+    assert_eq!(texts.len(), 3);
+    assert!(texts.iter().all(|t| t.chars().filter(|c| !c.is_whitespace()).count() == 10), "{texts:?}");
+    assert!(texts[0].starts_with("PPaaggee") && texts[2].ends_with("31"), "{texts:?}");
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 3);
+    s.undo(id).unwrap();
+    // Underlay on one page only; a bad page or an empty source is refused.
+    s.apply(id, Edit::OverlayPages { pages: vec![1], name: "other.pdf".into(), bytes: bytes.clone(), under: true }).unwrap();
+    assert!(s.apply(id, Edit::OverlayPages { pages: vec![9], name: "other.pdf".into(), bytes, under: false }).is_err());
+    assert!(
+        s.apply(id, Edit::OverlayPages { pages: vec![0], name: "junk.pdf".into(), bytes: Arc::new(b"not a pdf".to_vec()), under: false }).is_err()
+    );
+}
+
+#[test]
+fn repair_rewrites_a_file_whose_cross_reference_data_is_damaged() {
+    let (s, id) = session_with(3);
+    let good = s.save_bytes(id).unwrap();
+    let mut bad = good.as_ref().clone();
+    // Point startxref at nothing.
+    let at = bad.windows(9).rposition(|w| w == b"startxref").unwrap();
+    let tail = "startxref\n7\n%%EOF\n";
+    bad.truncate(at);
+    bad.extend_from_slice(tail.as_bytes());
+    let mut broken = Session::new();
+    let bid = broken.open("broken.pdf", None, Arc::new(bad), None).unwrap();
+    let (fixed, log) = broken.repair(bid).unwrap();
+    assert!(!log.is_empty(), "the damage is reported");
+    let mut again = Session::new();
+    let aid = again.open("fixed.pdf", None, fixed, None).unwrap();
+    assert_eq!(again.get(aid).unwrap().info.pages.len(), 3);
+    assert!(again.get(aid).unwrap().repair_log().is_empty(), "the rewritten file is sound");
+    // A sound file repairs with nothing to report.
+    assert!(s.repair(id).unwrap().1.is_empty());
+}

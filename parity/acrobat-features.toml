@@ -10026,3 +10026,51 @@ commands = []
 tools = []
 evidence = []
 notes = ""
+
+[[feature]]
+id = "organize.resize-pages"
+title = "Resize pages to a paper size"
+area = "D"
+tier = "P2"
+milestone = "M4"
+status = "shipped"
+commands = ["page.resize"]
+tools = ["doc_print"]
+evidence = ["crates/ui-egui/tests/viewer.rs::page_tools_open_their_result_as_a_new_document", "crates/automation/tests/automation.rs::overlaying_repairing_and_resizing_through_tools"]
+notes = "fit, shrink only or keep size, onto Letter/Legal/Tabloid/A3/A4/A5; opens a new document"
+
+[[feature]]
+id = "organize.pages-per-sheet"
+title = "Pages per sheet (N-up)"
+area = "D"
+tier = "P2"
+milestone = "M4"
+status = "shipped"
+commands = ["page.per_sheet"]
+tools = ["doc_print"]
+evidence = ["crates/ui-egui/tests/viewer.rs::page_tools_open_their_result_as_a_new_document", "crates/automation/tests/automation.rs::overlaying_repairing_and_resizing_through_tools"]
+notes = "2 to 36 pages per sheet, optional borders; opens a new document"
+
+[[feature]]
+id = "organize.overlay-pages"
+title = "Overlay pages from another PDF"
+area = "D"
+tier = "P2"
+milestone = "M4"
+status = "shipped"
+commands = ["page.overlay"]
+tools = ["doc_overlay"]
+evidence = ["crates/engine/src/tests.rs::overlay_puts_another_files_pages_on_top_or_underneath_one_for_one", "crates/automation/tests/automation.rs::overlaying_repairing_and_resizing_through_tools"]
+notes = "page k of the file on the k-th chosen page, on top or behind; a shorter file starts over"
+
+[[feature]]
+id = "organize.repair-pdf"
+title = "Repair PDF"
+area = "D"
+tier = "P2"
+milestone = "M4"
+status = "shipped"
+commands = ["optimize.repair"]
+tools = ["doc_repair"]
+evidence = ["crates/engine/src/tests.rs::repair_rewrites_a_file_whose_cross_reference_data_is_damaged", "crates/ui-egui/tests/viewer.rs::page_tools_open_their_result_as_a_new_document"]
+notes = "rewrites the file from scratch and reports what was repaired; opens the copy"

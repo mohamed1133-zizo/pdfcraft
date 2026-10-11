@@ -3471,3 +3471,28 @@ fn command_batch_refuses_more_than_a_thousand_steps() {
     let err = a.call("command_batch", &json!({"steps": steps})).unwrap_err();
     assert!(err.to_string().contains("at most 1000 steps"), "{err}");
 }
+
+#[test]
+fn overlaying_repairing_and_resizing_through_tools() {
+    let dir = workdir("page-tools");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // Overlay the two pages of b.pdf onto pages 1–2 only, then take it back.
+    let r = ok(&mut a, "doc_overlay", json!({ "doc": doc, "file": "b.pdf", "pages": [1, 2] }));
+    assert_eq!(r["pages"], 3);
+    let texts = page_text(&mut a, doc);
+    assert_eq!(texts[2], "Page 3", "page 3 is untouched: {texts:?}");
+    assert_ne!(texts[0], "Page 1", "page 1 now carries the overlay too: {texts:?}");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(page_text(&mut a, doc)[0], "Page 1");
+    assert!(a.call("doc_overlay", &json!({ "doc": doc, "file": "nope.pdf" })).is_err());
+    // Repair writes a sound copy.
+    let r = ok(&mut a, "doc_repair", json!({ "doc": doc, "path": "fixed.pdf" }));
+    assert_eq!(r["repairs"], json!([]));
+    let fixed = ok(&mut a, "doc_open", json!({ "path": "fixed.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, fixed).len(), 3);
+    // Resizing and pages per sheet are doc_print onto another paper.
+    ok(&mut a, "doc_print", json!({ "doc": doc, "layout": "fit", "paper": "A5", "path": "a5.pdf" }));
+    let r = ok(&mut a, "doc_print", json!({ "doc": doc, "layout": "multiple", "per_sheet": 2, "path": "two-up.pdf" }));
+    assert_eq!(r["sheets"], 2);
+}
