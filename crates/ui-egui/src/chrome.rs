@@ -298,15 +298,18 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         let share = icons::button(ui, "share-2", 32.0, false, "Share");
                         egui::Popup::menu(&share).show(|ui| {
                             ui.set_min_width(210.0);
-                            for (id, label) in [
-                                ("file.share_link", tl!("Share as link…")),
-                                ("file.save_as", tl!("Save as…")),
-                                ("export.docx", tl!("Export to Word…")),
-                                ("export.image", tl!("Export to image…")),
-                                ("print.dialog", tl!("Print…")),
+                            if widgets::menu_item(ui, tl!("Share as link…"), "").clicked() {
+                                app.run_command("file.share_link");
+                                ui.close();
+                            }
+                            ui.separator();
+                            for (via, label) in [
+                                (crate::share_ui::Via::Email, "Send by email…"),
+                                (crate::share_ui::Via::WhatsApp, "Send via WhatsApp…"),
+                                (crate::share_ui::Via::Telegram, "Send via Telegram…"),
                             ] {
                                 if widgets::menu_item(ui, label, "").clicked() {
-                                    app.run_command(id);
+                                    app.open_share_via(via);
                                     ui.close();
                                 }
                             }

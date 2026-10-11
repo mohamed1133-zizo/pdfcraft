@@ -153,6 +153,45 @@ impl AfterExpiry {
     }
 }
 
+/// Where the finished link goes straight away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Via {
+    Email,
+    WhatsApp,
+    Telegram,
+}
+
+impl Via {
+    fn label(self) -> &'static str {
+        match self {
+            Via::Email => "your email program",
+            Via::WhatsApp => "WhatsApp",
+            Via::Telegram => "Telegram",
+        }
+    }
+}
+
+fn pct(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// The address that opens `via` with a message carrying `link` for the file `name`.
+pub(crate) fn via_url(via: Via, name: &str, link: &str) -> String {
+    match via {
+        Via::Email => format!("mailto:?subject={}&body={}", pct(name), pct(&format!("{name}\n{link}"))),
+        Via::WhatsApp => format!("https://wa.me/?text={}", pct(&format!("{name} {link}"))),
+        Via::Telegram => format!("https://t.me/share/url?url={}&text={}", pct(link), pct(name)),
+    }
+}
+
 enum Purpose {
     Connect(CloudKind),
     Share,
@@ -172,6 +211,8 @@ pub(crate) struct Cloud {
     pub(crate) choice: usize,
     pub(crate) days: u32,
     pub(crate) message: Option<String>,
+    /// Open the finished link in this program.
+    pub(crate) via: Option<Via>,
 }
 
 impl Default for Cloud {
@@ -186,6 +227,7 @@ impl Default for Cloud {
             choice: 0,
             days: 7,
             message: None,
+            via: None,
         }
     }
 }
@@ -359,6 +401,10 @@ impl PdfCraftApp {
                     self.cloud.shared.insert(0, s.clone());
                     self.cloud.shared.truncate(MAX_SHARED);
                     self.copy_link(&s.link);
+                    if let Some(via) = self.cloud.via.take() {
+                        let url = via_url(via, &s.name, &s.link);
+                        self.open_url(&url);
+                    }
                 }
             }
             (Purpose::Remove(link), Ok(out)) => {
@@ -385,8 +431,17 @@ impl PdfCraftApp {
         self.cloud.message = Some("The link is ready, and copied to the clipboard.".into());
     }
 
+    /// Share ▸ Send by email / WhatsApp / Telegram: make the link, then open it there.
+    pub(crate) fn open_share_via(&mut self, via: Via) {
+        self.open_share();
+        if self.dialog == Some(Dialog::ShareLink) {
+            self.cloud.via = Some(via);
+        }
+    }
+
     /// File ▸ Share as link…
     pub fn open_share(&mut self) {
+        self.cloud.via = None;
         if self.cloud_source.is_none() {
             self.notify("Sharing isn't available in this build.");
             return;
@@ -488,9 +543,13 @@ pub(crate) fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) 
                 .small()
                 .color(t.text_muted),
         );
+        if let Some(via) = app.cloud.via {
+            ui.label(egui::RichText::new(format!("When the link is ready it opens in {}.", via.label())).small().color(t.text_muted));
+        }
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            if ui.add_enabled_ui(!busy, |ui| widgets::pill_button(ui, "Upload and make link", true)).inner.clicked() {
+            let go = if app.cloud.via.is_some() { "Upload and send" } else { "Upload and make link" };
+            if ui.add_enabled_ui(!busy, |ui| widgets::pill_button(ui, go, true)).inner.clicked() {
                 share = true;
             }
             if busy {
@@ -756,6 +815,14 @@ mod tests {
         let end = app.cloud.shared[0].expires_at.unwrap();
         assert!(end > unix_now() + 6 * 86_400 && end < unix_now() + 8 * 86_400, "seven days from now");
 
+        // Sharing "via" a program hands the link over once, then forgets it.
+        app.open_share_via(Via::WhatsApp);
+        assert_eq!(app.cloud.via, Some(Via::WhatsApp));
+        app.share_now(&ctx);
+        wait(&mut app, &ctx);
+        assert_eq!(app.cloud.via, None);
+        app.cloud.shared.remove(0);
+
         // Not due yet: nothing is removed.
         app.poll_cloud(&ctx);
         assert!(removed.lock().unwrap().is_empty() && app.cloud.shared.len() == 1);
@@ -801,6 +868,20 @@ mod tests {
         assert_eq!(app.cloud.shared.len(), 1, "the record stays so the file isn't forgotten");
         assert!(app.cloud.retry_at > unix_now());
         assert!(app.cloud.message.as_deref().unwrap_or("").contains("offline"));
+    }
+
+    #[test]
+    fn the_link_opens_in_the_chosen_program() {
+        let (name, link) = ("Q3 report.pdf", "https://cloud.test/s/a?x=1&y=2");
+        assert_eq!(via_url(Via::WhatsApp, name, link), "https://wa.me/?text=Q3%20report.pdf%20https%3A%2F%2Fcloud.test%2Fs%2Fa%3Fx%3D1%26y%3D2");
+        assert_eq!(
+            via_url(Via::Telegram, name, link),
+            "https://t.me/share/url?url=https%3A%2F%2Fcloud.test%2Fs%2Fa%3Fx%3D1%26y%3D2&text=Q3%20report.pdf"
+        );
+        assert_eq!(
+            via_url(Via::Email, name, link),
+            "mailto:?subject=Q3%20report.pdf&body=Q3%20report.pdf%0Ahttps%3A%2F%2Fcloud.test%2Fs%2Fa%3Fx%3D1%26y%3D2"
+        );
     }
 
     #[test]

@@ -836,7 +836,7 @@ fn the_share_button_lists_every_way_to_share() {
     let mut h = pages_panel_harness(&[(200, 300); 2]);
     h.get_by_label("Share").click();
     h.run_steps(4);
-    for item in ["Share as link…", "Save as…", "Export to Word…", "Print…"] {
+    for item in ["Share as link…", "Send by email…", "Send via WhatsApp…", "Send via Telegram…"] {
         assert!(h.query_by_label_contains(item).is_some(), "{item} is in the Share menu");
     }
 }
