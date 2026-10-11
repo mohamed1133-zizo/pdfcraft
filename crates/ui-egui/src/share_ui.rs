@@ -635,6 +635,13 @@ pub(crate) fn settings_ui(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) 
                     field(ui, "Client secret", &mut a.client_secret, true);
                 }
             }
+            let needs_id = kind != CloudKind::Nextcloud && a.client_id.trim().is_empty();
+            if needs_id {
+                ui.label(
+                    egui::RichText::new("Paste the Client ID first (steps below). Without it the button has nothing to sign in with.")
+                        .color(t.text_muted),
+                );
+            }
             ui.horizontal(|ui| {
                 let label = match (connected, kind) {
                     (true, _) => "Sign in again",
